@@ -4,54 +4,27 @@ var websocket = null;
 var row = 15;
 var col = 15;
 var widthAndHeight = 30;//格子宽度高度
+var isGameOver = false;
+var lastpoint = null;
 var WuZiQi = {
     isEnd:function(xy,chessmanColor){//判断是否结束游戏
         var id = parseInt(xy);
-        //竖的计算
         var num = 1;
         num = WuZiQi.shujia(num,id,chessmanColor);
         num = WuZiQi.shujian(num,id,chessmanColor);
-        if(num>=5){
-            if(chessmanColor==color){
-                confirm("游戏结束！你赢了！");
-            }else{
-                confirm("游戏结束！你输了！");
-            }
-            return ;
-        }
+        if(this.checkStatus(num, chessmanColor))return;
         num = 1;
         num = WuZiQi.hengjia(num,id,chessmanColor);
         num = WuZiQi.hengjian(num,id,chessmanColor);
-        if(num>=5){
-            if(chessmanColor==color){
-                confirm("游戏结束！你赢了！");
-            }else{
-                confirm("游戏结束！你输了！");
-            }
-            return ;
-        }
-;        num = 1;
+        if(this.checkStatus(num, chessmanColor))return;
+;       num = 1;
         num = WuZiQi.zuoxiejia(num,id,chessmanColor);
         num = WuZiQi.zuoxiejian(num,id,chessmanColor);
-        if(num>=5){
-            if(chessmanColor==color){
-                confirm("游戏结束！你赢了！");
-            }else{
-                confirm("游戏结束！你输了！");
-            }
-            return ;
-        }
+        if(this.checkStatus(num, chessmanColor))return;
         num = 1;
         num = WuZiQi.youxiejia(num,id,chessmanColor);
         num = WuZiQi.youxiejian(num,id,chessmanColor);
-        if(num>=5){
-            if(chessmanColor==color){
-                confirm("游戏结束！你赢了！");
-            }else{
-                confirm("游戏结束！你输了！");
-            }
-            return ;
-        }
+        this.checkStatus(num, chessmanColor)
     },youxiejia:function(num,id,color){
         var yu = id%row;
         id = id+(row-1);
@@ -176,6 +149,11 @@ var WuZiQi = {
         }
     },
     playchess:function(e){
+        if (isGameOver) {
+            $("#messageContent").append("系统：游戏已经结束，请刷新重新匹配");
+            $("#messageContent").append("\n");
+            return;
+        }
         if(bout&&color!=""){
             if($(e).children("div").length>0){
                 alert("这里已经有子了！请在其它地方落子！");
@@ -219,6 +197,22 @@ var WuZiQi = {
             $("#messageContent").scrollTop($("#messageContent")[0].scrollHeight - $("#messageContent").height());
           }
           
+      },
+      checkStatus:function(number, chessmanColor) {
+        if(number>=5){
+            isGameOver =true
+            if(chessmanColor==color){
+                setTimeout(() => {
+                    confirm("游戏结束！你赢了！");
+                }, 100);
+            }else{
+                setTimeout(() => {
+                    confirm("游戏结束！你输了！");
+                }, 100);
+            }
+            return true;
+        }
+        return false;
       }
 };
 $(function(){
@@ -226,8 +220,6 @@ $(function(){
     $("#background").css({width:(row*widthAndHeight)+"px",height:(col*widthAndHeight)+"px"});
     //用canvas画棋盘
     var canvas = document.createElement("canvas");
-//    $(canvas).attr({width:((row-1)*widthAndHeight)+"px",height:(col-1)*widthAndHeight+"px"});
-//    $(canvas).css({"position":"relative","top":(widthAndHeight/2)+"px","left":(widthAndHeight/2)+"px","z-index":9999});
     $(canvas).attr({width:(row*widthAndHeight)+"px",height:col*widthAndHeight+"px"});
     $(canvas).css({position:"relative","z-index":9999});
     var cot = canvas.getContext("2d");
@@ -266,7 +258,7 @@ $(function(){
       //判断当前浏览器是否支持WebSocket
       if('WebSocket' in window){
           // 在这里修改连接
-          websocket = new WebSocket("ws://"+window.location.host+"/WuZiQi/wuziqisocket");
+          websocket = new WebSocket("ws://localhost:8011/ws");
       }
       else{
           alert('Not support websocket');
@@ -291,15 +283,22 @@ $(function(){
             //将多行文本滚动总是在最下方
             $("#messageContent").scrollTop($("#messageContent")[0].scrollHeight - $("#messageContent").height());
         }
-        if(result.xy!=""&&result.color!=""){
+        if(result.xy&&result.color){
+            // 修改回去颜色
+            if (lastpoint) {
+                lastpoint.style.background = "";
+            }
             $("#"+result.xy).html("<div class=\"chessman "+result.color+"\"></div>");
+            // 做个标识
+            $("#"+result.xy)[0].style.background = "red";
+            lastpoint = $("#"+result.xy)[0];
             bout = result.bout;//落子后才改状态
             WuZiQi.isEnd(result.xy,result.color);
-        }else if(result.xy==""&&result.bout){//没有坐标且bout为true，则为对局首次开始落子
+        }else if(!result.xy&&result.bout){//没有坐标且bout为true，则为对局首次开始落子
             bout = result.bout;
         }
             
-        if(result.xy==""&&result.color!=""){//没有坐标，但有颜色，则为首次赋予棋子颜色
+        if(!result.xy&&result.color){//没有坐标，但有颜色，则为首次赋予棋子颜色
             color = result.color;
         }
       };

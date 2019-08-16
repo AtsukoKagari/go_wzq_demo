@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
-	"github.com/satori/go.uuid"
 )
 
 //客户端管理
@@ -27,24 +26,26 @@ type Client struct {
 	id string
 	//连接的socket
 	socket *websocket.Conn
+	// 为了方便数据处理，放入玩家编号
+	playerindex		int
 }
 
 // 对战信息
 type Result struct{
 	// 落子坐标
-	xy			string	`json:"xy,omitempty"`
+	Xy			string	`json:"xy,omitempty"`
 	// 发送消息
-	message		string	`json:"message,omitempty"`
+	Message		string	`json:"message,omitempty"`
 	// 允许下棋
-	bout		bool	`json:"bout,omitempty"`
+	Bout		bool	`json:"bout,omitempty"`
 	// color
-	color		string	`json:"color,omitempty"`
+	Color		string	`json:"color,omitempty"`
 }
 
 //创建客户端管理者
 var manager = ClientManager{
 	register:   make(chan *Client),
-	unregister: make(chan *Client),
+	unregister: make(chan int),
 	clients:    make(map[int]*Client),
 	index:		0,
 }
@@ -59,25 +60,28 @@ func (manager *ClientManager) start() {
 			if (manager.index%2 == 0){
 				// 或许有对手了，确认对手存在
 				if(manager.clients[manager.index-1] != nil){
+					conn.playerindex = manager.index
 					// 把自己载入队列先
 					manager.clients[manager.index] = conn
 					// 让先进来的人先下
-					jsonMessage, _ := json.Marshal(&Result{bout: true, message:"系统：游戏开始，请您先落子", color:"black"})
+					jsonMessage, _ := json.Marshal(&Result{Bout: true, Message:"系统：游戏开始，请您先落子", Color:"black"})
 					manager.clients[manager.index-1].send(jsonMessage)
 					// 给自己的提示
-					jsonMessage, _ := json.Marshal(&Result{bout: false, message:"系统：游戏开始，请等待对手落子！", color:"white"})
+					jsonMessage, _ = json.Marshal(&Result{Bout: false, Message:"系统：游戏开始，请等待对手落子！", Color:"white"})
 					conn.send(jsonMessage)
 				} else {
 					// 对手不存在，把自己加入奇数位置
 					manager.index--
+					conn.playerindex = manager.index
 					manager.clients[manager.index] = conn
-					jsonMessage, _ := json.Marshal(&Result{message:"系统：等待玩家匹配！"})
+					jsonMessage, _ := json.Marshal(&Result{Message:"系统：等待玩家匹配！"})
 					conn.send(jsonMessage)
 				}
 			} else {
 				// 自己本身就是奇数位置，没有对手，加入到队列并且返回信息
-				jsonMessage, _ := json.Marshal(&Result{message:"系统：等待玩家匹配！"})
+				jsonMessage, _ := json.Marshal(&Result{Message:"系统：等待玩家匹配！"})
 				conn.send(jsonMessage)
+				conn.playerindex = manager.index
 				manager.clients[manager.index] = conn
 			}
 
@@ -86,17 +90,19 @@ func (manager *ClientManager) start() {
 			//判断连接的状态，如果是true,就关闭send，删除连接client的值
 			if(manager.clients[conn] != nil) {
 				// 先找到对手
+				var opp *Client
 				if (conn % 2 == 0) {
-					opp := manager.clients[conn - 1]
+					opp = manager.clients[conn - 1]
 				}else{
-					opp := manager.clients[conn + 1]
+					opp = manager.clients[conn + 1]
+				}
+				// 给对手发消息
+				if (opp != nil) {
+					jsonMessage, _ := json.Marshal(&Result{Message:"系统：你的对手已离开！"})
+					opp.send(jsonMessage)
 				}
 				// 删除自己
-				delete(manager.clients, manager.clients[conn])
-				if (opp != nil) {
-					jsonMessage, _ := json.Marshal(&Result{message:"系统：你的对手已离开！"})
-					conn.send(jsonMessage)
-				}
+				delete(manager.clients, conn)
 			}
 		// 有信息进来
 		}
@@ -111,7 +117,58 @@ func (c *Client) send(message []byte){
 	}
 }
 
+func (c *Client) ReadandWrite() {
+	// 关闭socket
+	defer func(){
+		manager.unregister <- c.playerindex
+		c.socket.Close()
+	}()
 
+	for {
+		// 读取消息
+		_, message, err := c.socket.ReadMessage()
+		// 如果发生异常就把socket关闭
+		if err != nil {
+			manager.unregister <- c.playerindex
+			c.socket.Close()
+			break
+		}
+
+		// 如果没有错误就对json解析
+		var f interface{}
+		err = json.Unmarshal(message, &f)
+		if err != nil {
+			fmt.Println(err)
+		}
+		data := f.(map[string]interface{})
+		// 通过自己的编号查找对手
+		var opp *Client
+		if (c.playerindex%2 == 0){
+			opp = manager.clients[c.playerindex - 1]
+		}else{
+			opp = manager.clients[c.playerindex + 1]
+		}
+
+		// 对手存在就发消息
+		if (opp != nil) {
+			// 有坐标代表一个落子的信息
+			if(data["xy"]!=nil && data["xy"]!="") {
+				// 需要给自己发消息，前端是通过消息画图
+				c.send(message)
+				// 给对手发消息
+				jsonMessage, _ := json.Marshal(&Result{Message:"系统：对方已落子，正在等待您落子！", Bout: true, Xy:data["xy"].(string), Color:data["color"].(string)})
+				opp.send(jsonMessage)
+			} else {
+				// 代表单纯的发消息
+				jsonMessage, _ := json.Marshal(&Result{Message: fmt.Sprintf("%s:%s", c.id, data["message"].(string))})
+				c.send(jsonMessage)
+				opp.send(jsonMessage)
+			}
+		}
+
+	}
+
+}
 
 func main() {
 	fmt.Println("Starting application...")
@@ -132,12 +189,15 @@ func wsHandler(res http.ResponseWriter, req *http.Request) {
 	}
 
 	//每一次连接都会新开一个client，client.id通过uuid生成保证每次都是不同的
-	client := &Client{id: uuid.Must(uuid.NewV4()).String(), socket: conn, send: make(chan []byte)}
+	client := &Client{id: req.RemoteAddr, socket: conn, playerindex: 0}
 	//注册一个新的链接
 	manager.register <- client
 
+	// 启动协程来处理消息
+	go client.ReadandWrite()
 	// //启动协程收web端传过来的消息
 	// go client.read()
 	// //启动协程把消息返回给web端
 	// go client.write()
+
 }
